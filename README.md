@@ -123,3 +123,93 @@ Observed maximum elementwise errors on the included deterministic cases:
 
 API conventions were checked against IBM's [bit-ordering guide](https://quantum.cloud.ibm.com/docs/en/guides/bit-ordering)
 and [CouplingMap documentation](https://quantum.cloud.ibm.com/docs/en/api/qiskit/qiskit.transpiler.CouplingMap).
+
+## Phase four: automated benchmarks
+
+```bash
+# Default sweep: GHZ, QFT and random Clifford+T, n=3 through 8.
+python run_benchmarks.py
+
+# A short check of all families.
+python run_benchmarks.py --max-qubits 4 --tradeoff-qubits 4
+
+# Multiple circuit seeds and independent timing repetitions.
+python run_benchmarks.py --max-qubits 5 --seeds 2026 2027 2028 --repeats 3
+
+# LaTeX table on stdout; both Markdown and LaTeX are always saved.
+python run_benchmarks.py --max-qubits 4 --table-format latex
+
+python -m unittest -v test_crosstalk_model test_run_benchmarks
+```
+
+The default output folder is `./benchmark_results`. Each completed or failed
+run is atomically checkpointed into `results.json`. The folder also contains
+`comparison.md`, `comparison.tex`, `node_compression.png`,
+`fidelity_tradeoff.png`, and vector PDF versions of both figures. PNG output
+is 600 dpi at 7.16-inch two-column width; PDFs embed TrueType fonts. These
+settings follow the [IEEE graphics size and resolution guidance](https://journals.ieeeauthorcenter.ieee.org/create-your-ieee-journal-article/create-graphics-for-your-article/resolution-and-size/).
+Check the target publication's specific requirements before submission.
+
+The three method groups use exactly the same routed instruction sequence,
+depolarizing strengths and per-instruction crosstalk events:
+
+1. **Dense baseline:** complex128 density matrix, local tensor contractions
+   and independent partial-trace replacement for depolarization.
+2. **Exact DD baseline:** the existing engine at epsilon `1e-15`. This is a
+   near-exact floating-point baseline, not epsilon zero or symbolic arithmetic.
+3. **Approximate DD:** epsilon `1e-4`, `1e-3`, and `1e-2` by default.
+
+QFT includes final swaps and an explicit H-T-H input preparation on qubit 0.
+Random Clifford+T uses deterministic seeded single-qubit layers with CX
+matchings. All circuits are routed to the selected linear, ring or complete
+hardware graph with fixed transpiler seed and optimization level zero.
+Gate counts and the complete routed instruction list are recorded in JSON.
+
+### Reading the metrics
+
+- `simulation_seconds` uses `time.perf_counter()`. It includes simulator
+  construction, local gate parsing, cache work and simulator diagnostics.
+  It excludes routing, process startup, dense DD export, fidelity and plotting.
+  Export, metric and worker wall times are recorded separately. Each repetition
+  uses a fresh process with no warmup. BLAS thread count is configurable.
+- `peak_active_nodes` and `final_active_nodes` count all nonterminal nodes
+  retained by the unique table. They are equal because the current table has
+  no garbage collection. This includes intermediate operators and states.
+- `final_state_nodes` counts nodes reachable from the final density root.
+  `peak_state_nodes_at_instruction_boundaries` is explicitly sampled only
+  after complete instructions and includes the initial state. It is not an
+  internal-operation peak. Compute-cache entry count is recorded separately.
+- The first figure shows **peak retained nodes**. The tradeoff figure uses
+  **final-state node reduction** against the matching exact-DD run. Missing
+  baselines produce missing compression values, never invented ratios.
+- `fidelity` is the squared Uhlmann fidelity requested in the experiment.
+  If trace, Hermiticity or positivity fails the configured physical tolerance,
+  raw fidelity and infidelity are `null`. The raw trace, minimum eigenvalue,
+  negative eigenvalue mass and matrix errors remain available.
+- `projected_fidelity` is a separate diagnostic: symmetrize the approximate
+  matrix, project its eigenvalues onto the probability simplex, then calculate
+  fidelity. The correction magnitude is recorded. This projection is never
+  fed back into the DD simulation. The tradeoff plot labels this quantity and
+  marks invalid raw states with crosses. It does not claim the original DD
+  output was a valid density matrix.
+
+Default safety budgets are 60 seconds, 100,000 retained nodes and 250,000
+compute-cache entries per run. Use `--timeout-seconds`, `--max-dd-nodes` and
+`--max-cache-entries` to change them. Timeouts and resource failures are stored
+with their status and excluded from successful-run medians. A sweep may thus
+finish with incomplete individual experiments. Dense matrices also grow as
+`4**n`; increasing the range requires appropriate hardware.
+
+The committed example sweep uses all three families for n=3 through 8,
+one seed and one timing repetition. Its exact command is:
+
+```bash
+python run_benchmarks.py --max-qubits 8 --timeout-seconds 12 \
+  --max-dd-nodes 50000 --max-cache-entries 150000 --tradeoff-qubits 4
+```
+
+The four-qubit tradeoff slice is explicit so completed methods can be compared
+even when larger exact-DD runs exceed the budget. Single timing observations
+are demonstration data, not statistically established performance claims.
+Results may show limited compression, slower DD execution, or nonphysical
+approximate states. The benchmark reports these outcomes as measured.
